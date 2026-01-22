@@ -34,9 +34,14 @@ class AzureChatController extends ChangeNotifier {
     notifyListeners();
   }
 
-  // コンストラクタ - 初期化時に今日のチャットドキュメントを作成
+  // 過去の会話履歴（コンテキスト用）
+  final List<ChatMessage> _historyMessages = [];
+  int _historyDays = 7; // 過去何日分の履歴を読み込むか
+
+  // コンストラクタ - 初期化時に今日のチャットドキュメントを作成と履歴読み込み
   AzureChatController() {
     _initializeTodayChat();
+    _loadRecentHistory();
   }
   
   /// 今日のチャットドキュメントを初期化
@@ -76,6 +81,60 @@ class AzureChatController extends ChangeNotifier {
     }
   }
 
+  /// 過去の会話履歴を読み込む
+  Future<void> _loadRecentHistory() async {
+    try {
+      final user = _auth.currentUser;
+      if (user == null) {
+        print('ユーザーが認証されていません');
+        return;
+      }
+
+      _historyMessages.clear();
+
+      // 今日を含む過去N日分の日付を生成
+      final now = DateTime.now();
+      final dates = List.generate(_historyDays + 1, (i) {
+        final date = now.subtract(Duration(days: i));
+        return DateFormat('yyyyMMdd').format(date);
+      });
+
+      // 各日付のチャット履歴を取得
+      for (final dateStr in dates) {
+        final docId = 'allchat_$dateStr';
+        final chatRef = _firestore
+            .collection('users')
+            .doc(user.uid)
+            .collection('chat')
+            .doc(docId);
+
+        final docSnapshot = await chatRef.get();
+        if (docSnapshot.exists) {
+          final data = docSnapshot.data();
+          final messagesList = data?['messages'] as List<dynamic>? ?? [];
+
+          for (var msgData in messagesList) {
+            final role = msgData['role'] == 'user' 
+                ? MessageRole.user 
+                : MessageRole.assistant;
+            final content = msgData['content'] as String;
+            final timestamp = (msgData['timestamp'] as Timestamp).toDate();
+
+            _historyMessages.add(ChatMessage(
+              role: role,
+              content: content,
+              timestamp: timestamp,
+            ));
+          }
+        }
+      }
+
+      print('会話履歴読み込み完了: ${_historyMessages.length}件（今日含む過去${_historyDays + 1}日分）');
+    } catch (e) {
+      print('会話履歴読み込みエラー: $e');
+    }
+  }
+
   /// メッセージを送信（通常版）
   Future<void> sendMessage(String text) async {
     if (text.trim().isEmpty || _isLoading) return;
@@ -95,13 +154,23 @@ class AzureChatController extends ChangeNotifier {
     await _saveChatMessage(userMessage);
 
     try {
-      // 会話履歴を構築
-      final conversationHistory = _messages.map((msg) {
-        return {
-          'role': msg.role == MessageRole.user ? 'user' : 'assistant',
-          'content': msg.content,
-        };
-      }).toList();
+      // 会話履歴を構築（過去の履歴 + 現在の会話）
+      final historyContext = _buildHistoryContext();
+      print('📚 過去の履歴をコンテキストに追加: ${historyContext.length}件');
+      
+      final conversationHistory = [
+        // 過去の履歴（要約版またはサンプリング）
+        ...historyContext,
+        // 現在の会話
+        ..._messages.map((msg) {
+          return {
+            'role': msg.role == MessageRole.user ? 'user' : 'assistant',
+            'content': msg.content,
+          };
+        }).toList(),
+      ];
+      
+      print('💬 AIに送信する合計メッセージ数: ${conversationHistory.length}件');
 
       // Azure OpenAI にリクエスト
       final response = await _azureService.sendChatMessage(
@@ -149,13 +218,23 @@ class AzureChatController extends ChangeNotifier {
     await _saveChatMessage(userMessage);
 
     try {
-      // 会話履歴を構築
-      final conversationHistory = _messages.map((msg) {
-        return {
-          'role': msg.role == MessageRole.user ? 'user' : 'assistant',
-          'content': msg.content,
-        };
-      }).toList();
+      // 会話履歴を構築（過去の履歴 + 現在の会話）
+      final historyContext = _buildHistoryContext();
+      print('📚 過去の履歴をコンテキストに追加: ${historyContext.length}件');
+      
+      final conversationHistory = [
+        // 過去の履歴（要約版またはサンプリング）
+        ...historyContext,
+        // 現在の会話
+        ..._messages.map((msg) {
+          return {
+            'role': msg.role == MessageRole.user ? 'user' : 'assistant',
+            'content': msg.content,
+          };
+        }).toList(),
+      ];
+      
+      print('💬 AIに送信する合計メッセージ数: ${conversationHistory.length}件');
 
       // アシスタントメッセージの準備（空の状態で追加）
       final assistantMessage = ChatMessage(
@@ -207,6 +286,48 @@ class AzureChatController extends ChangeNotifier {
   void clearError() {
     _errorMessage = null;
     notifyListeners();
+  }
+
+  /// 過去の履歴をコンテキストとして構築
+  /// トークン制限を考慮して、適切な範囲をサンプリング
+  List<Map<String, String>> _buildHistoryContext() {
+    if (_historyMessages.isEmpty) {
+      print('⚠️ 過去の履歴が空です');
+      return [];
+    }
+
+    print('📖 過去の履歴総数: ${_historyMessages.length}件');
+
+    // トークン数の概算（1トークン ≈ 4文字として計算）
+    const maxHistoryTokens = 2000; // 履歴用に確保するトークン数
+    int currentTokens = 0;
+    final contextMessages = <Map<String, String>>[];
+
+    // 新しいものから順に追加（最近の会話を優先）
+    for (int i = _historyMessages.length - 1; i >= 0; i--) {
+      final msg = _historyMessages[i];
+      final estimatedTokens = (msg.content.length / 4).ceil();
+      
+      if (currentTokens + estimatedTokens > maxHistoryTokens) {
+        print('⚠️ トークン制限に達しました。${contextMessages.length}件の履歴を使用');
+        break;
+      }
+
+      contextMessages.insert(0, {
+        'role': msg.role == MessageRole.user ? 'user' : 'assistant',
+        'content': msg.content,
+      });
+      currentTokens += estimatedTokens;
+    }
+
+    print('✅ コンテキストに追加する履歴: ${contextMessages.length}件（約${currentTokens}トークン）');
+    return contextMessages;
+  }
+
+  /// 履歴読み込み日数を設定
+  void setHistoryDays(int days) {
+    _historyDays = days;
+    _loadRecentHistory();
   }
 
   /// チャットメッセージをFirestoreに保存
@@ -310,5 +431,103 @@ class AzureChatController extends ChangeNotifier {
   void dispose() {
     _messages.clear();
     super.dispose();
+  }
+
+  /// テスト用の過去の会話データを追加
+  Future<void> addTestHistoryData() async {
+    try {
+      final user = _auth.currentUser;
+      if (user == null) {
+        print('ユーザーが認証されていません');
+        return;
+      }
+
+      print('📝 テストデータを追加中...');
+
+      // 3日前のマラソンの会話
+      final threeDaysAgo = DateTime.now().subtract(const Duration(days: 3));
+      final date3 = DateFormat('yyyyMMdd').format(threeDaysAgo);
+      
+      await _firestore
+          .collection('users')
+          .doc(user.uid)
+          .collection('chat')
+          .doc('allchat_$date3')
+          .set({
+        'date': date3,
+        'messages': [
+          {
+            'role': 'user',
+            'content': '最近マラソンを始めました！',
+            'timestamp': Timestamp.fromDate(threeDaysAgo),
+          },
+          {
+            'role': 'assistant',
+            'content': 'マラソンを始めたんですね！素晴らしいです。健康的な趣味ですね。どれくらいの距離を走っていますか？',
+            'timestamp': Timestamp.fromDate(threeDaysAgo.add(const Duration(seconds: 5))),
+          },
+          {
+            'role': 'user',
+            'content': '週に3回、5キロくらい走っています',
+            'timestamp': Timestamp.fromDate(threeDaysAgo.add(const Duration(minutes: 1))),
+          },
+          {
+            'role': 'assistant',
+            'content': '週3回で5キロとは良いペースですね！継続が大切です。フルマラソンに挑戦する予定はありますか？',
+            'timestamp': Timestamp.fromDate(threeDaysAgo.add(const Duration(minutes: 1, seconds: 5))),
+          },
+        ],
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+
+      print('✅ 3日前のデータを追加: allchat_$date3');
+
+      // 5日前の野球の会話
+      final fiveDaysAgo = DateTime.now().subtract(const Duration(days: 5));
+      final date5 = DateFormat('yyyyMMdd').format(fiveDaysAgo);
+      
+      await _firestore
+          .collection('users')
+          .doc(user.uid)
+          .collection('chat')
+          .doc('allchat_$date5')
+          .set({
+        'date': date5,
+        'messages': [
+          {
+            'role': 'user',
+            'content': '野球観戦が好きで、よく球場に行きます',
+            'timestamp': Timestamp.fromDate(fiveDaysAgo),
+          },
+          {
+            'role': 'assistant',
+            'content': '野球観戦が趣味なんですね！どこのチームのファンですか？球場で見る野球は臨場感がありますよね。',
+            'timestamp': Timestamp.fromDate(fiveDaysAgo.add(const Duration(seconds: 5))),
+          },
+          {
+            'role': 'user',
+            'content': 'ジャイアンツファンです！',
+            'timestamp': Timestamp.fromDate(fiveDaysAgo.add(const Duration(minutes: 1))),
+          },
+          {
+            'role': 'assistant',
+            'content': '読売ジャイアンツのファンなんですね！伝統のあるチームです。東京ドームにはよく行かれますか？',
+            'timestamp': Timestamp.fromDate(fiveDaysAgo.add(const Duration(minutes: 1, seconds: 5))),
+          },
+        ],
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+
+      print('✅ 5日前のデータを追加: allchat_$date5');
+      print('🎉 テストデータの追加が完了しました');
+      
+      // データ追加後、履歴を再読み込み
+      await _loadRecentHistory();
+      
+    } catch (e) {
+      print('❌ テストデータ追加エラー: $e');
+    }
   }
 }
