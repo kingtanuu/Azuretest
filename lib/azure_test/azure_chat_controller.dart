@@ -36,16 +36,30 @@ class AzureChatController extends ChangeNotifier {
 
   // 過去の会話履歴（コンテキスト用）
   final List<ChatMessage> _historyMessages = [];
-  int _historyDays = 7; // 過去何日分の履歴を読み込むか
+  int _historyDays = 7; // 過去何日分の履歴を読み込むか（従来の方式用）
+  
+  // キーワードベースの検索を有効にするか
+  bool _useKeywordSearch = true;
 
-  // コンストラクタ - 初期化時に今日のチャットドキュメントを作成と履歴読み込み
+  // トピック変化検出用
+  final List<ChatMessage> _currentTopicMessages = []; // 現在のトピックの会話
+  String? _currentTopic; // 現在のトピック
+  int _topicCounter = 0; // 今日のトピック番号カウンター
+  String? _currentTopicId; // 現在のトピックID（例: topic_1）
+  int _currentTopicCharCount = 0; // 現在のトピックの累積文字数
+  static const int _topicCharThreshold = 3000; // キーワード中間保存の閾値
+
+  // コンストラクタ
   AzureChatController() {
-    _initializeTodayChat();
-    _loadRecentHistory();
+    _initializeTopicCounter();
+    // キーワードベース検索を使用しない場合のみ履歴読み込み
+    if (!_useKeywordSearch) {
+      _loadRecentHistory();
+    }
   }
   
-  /// 今日のチャットドキュメントを初期化
-  Future<void> _initializeTodayChat() async {
+  /// 今日のトピックカウンターを初期化
+  Future<void> _initializeTopicCounter() async {
     try {
       final user = _auth.currentUser;
       if (user == null) {
@@ -53,31 +67,22 @@ class AzureChatController extends ChangeNotifier {
         return;
       }
 
-      // 今日の日付を取得（YYYYMMDD形式）
       final dateStr = DateFormat('yyyyMMdd').format(DateTime.now());
-      final docId = 'allchat_$dateStr';
-
-      // users/{uid}/chat/{allchat_YYYYMMDD} のパスをチェック
-      final chatRef = _firestore
+      
+      // 今日の既存トピック数を取得
+      final topicsSnapshot = await _firestore
           .collection('users')
           .doc(user.uid)
           .collection('chat')
-          .doc(docId);
-
-      final docSnapshot = await chatRef.get();
-      if (!docSnapshot.exists) {
-        // ドキュメントが存在しない場合は作成
-        await chatRef.set({
-          'date': dateStr,
-          'createdAt': FieldValue.serverTimestamp(),
-          'messages': [],
-        });
-        print('今日のチャットドキュメント作成: $docId');
-      } else {
-        print('今日のチャットドキュメント既存: $docId');
-      }
+          .doc('chat_$dateStr')
+          .collection('topics')
+          .get();
+      
+      _topicCounter = topicsSnapshot.docs.length;
+      print('📊 今日のトピック数: $_topicCounter');
     } catch (e) {
-      print('チャットドキュメント初期化エラー: $e');
+      print('トピックカウンター初期化エラー: $e');
+      _topicCounter = 0;
     }
   }
 
@@ -150,44 +155,141 @@ class AzureChatController extends ChangeNotifier {
     _isLoading = true;
     notifyListeners();
 
-    // Firestoreに保存
-    await _saveChatMessage(userMessage);
+    // メッセージは即座にFirestoreに保存せず、トピック単位でまとめて保存
 
     try {
-      // 会話履歴を構築（過去の履歴 + 現在の会話）
-      final historyContext = _buildHistoryContext();
-      print('📚 過去の履歴をコンテキストに追加: ${historyContext.length}件');
-      
-      final conversationHistory = [
-        // 過去の履歴（要約版またはサンプリング）
-        ...historyContext,
-        // 現在の会話
-        ..._messages.map((msg) {
+      // キーワードベースの検索を使用する場合
+      if (_useKeywordSearch) {
+        print('');
+        print('════════════════════════════════════════════');
+        print('🚀 キーワードベース検索モード');
+        print('════════════════════════════════════════════');
+        
+        final keywords = await _extractKeywords(text);
+        
+        final relevantHistory = await _searchRelevantConversations(keywords);
+        
+        // 現在のトピックのメッセージのみを使用（新しいトピックの場合は空）
+        final currentTopicHistory = _currentTopicMessages.map((msg) {
           return {
             'role': msg.role == MessageRole.user ? 'user' : 'assistant',
             'content': msg.content,
           };
-        }).toList(),
-      ];
-      
-      print('💬 AIに送信する合計メッセージ数: ${conversationHistory.length}件');
+        }).toList();
+        
+        final conversationHistory = [
+          ...relevantHistory,
+          ...currentTopicHistory,
+          {'role': 'user', 'content': text}, // 現在のユーザーメッセージ
+        ];
+        
+        print('💬 AIに送信する合計メッセージ数: ${conversationHistory.length}件');
+        print('   - 関連する過去の会話: ${relevantHistory.length}件');
+        print('   - 現在のトピック: ${currentTopicHistory.length}件');
+        print('   - 今回のメッセージ: 1件');
+        print('');
 
-      // Azure OpenAI にリクエスト
-      final response = await _azureService.sendChatMessage(
-        messages: conversationHistory,
-        systemPrompt: _systemPrompt,
-      );
+        // Azure OpenAI にリクエスト
+        final response = await _azureService.sendChatMessage(
+          messages: conversationHistory,
+          systemPrompt: _systemPrompt,
+        );
 
-      // アシスタントの応答を追加
-      final assistantMessage = ChatMessage(
-        role: MessageRole.assistant,
-        content: response,
-        timestamp: DateTime.now(),
-      );
-      _messages.add(assistantMessage);
-      
-      // Firestoreに保存
-      await _saveChatMessage(assistantMessage);
+        // アシスタントの応答を追加
+        final assistantMessage = ChatMessage(
+          role: MessageRole.assistant,
+          content: response,
+          timestamp: DateTime.now(),
+        );
+        _messages.add(assistantMessage);
+        
+        // 新しいトピックの場合、トピックIDを生成
+        if (_currentTopicId == null) {
+          _topicCounter++;
+          _currentTopicId = 'topic_$_topicCounter';
+          _currentTopicCharCount = 0;
+          print('🆕 新しいトピック開始: $_currentTopicId');
+        }
+        
+        // 現在のトピックに会話を追加
+        _currentTopicMessages.add(userMessage);
+        _currentTopicMessages.add(assistantMessage);
+        
+        // 文字数を累積
+        _currentTopicCharCount += userMessage.content.length + assistantMessage.content.length;
+        print('📝 現在のトピック文字数: $_currentTopicCharCount文字');
+        
+        // トピック変化を検出
+        final topicChanged = await _detectTopicChange(userMessage, assistantMessage);
+        
+        if (topicChanged) {
+          print('');
+          print('🔄 トピック変化を検出！前のトピックを保存します');
+          
+          // 前のトピックから今回の会話を除外して保存
+          if (_currentTopicMessages.length >= 2) {
+            _currentTopicMessages.removeLast(); // assistantMessage
+            _currentTopicMessages.removeLast(); // userMessage
+          }
+          
+          if (_currentTopicMessages.isNotEmpty && _currentTopicId != null) {
+            // 前のトピックを保存
+            await _saveTopicToFirestore();
+            // キーワードを保存
+            await _saveCurrentTopicKeywords();
+          }
+          
+          // 新しいトピックとして現在の会話をセット
+          _currentTopicMessages.clear();
+          _currentTopicMessages.add(userMessage);
+          _currentTopicMessages.add(assistantMessage);
+          _currentTopic = null;
+          _currentTopicId = null; // 次のメッセージで新しいIDを生成
+          _currentTopicCharCount = userMessage.content.length + assistantMessage.content.length;
+          
+          // 新しいトピックを保存
+          await _saveTopicToFirestore();
+        } else {
+          // トピック継続中 - トピックを保存
+          await _saveTopicToFirestore();
+          
+          if (_currentTopicCharCount >= _topicCharThreshold) {
+            // 3000文字超えたら中間保存
+            print('');
+            print('📏 トピックが長くなりました（$_currentTopicCharCount文字）- キーワードを中間保存します');
+            await _saveCurrentTopicKeywords(isIntermediate: true);
+            _currentTopicCharCount = 0; // リセット
+          }
+        }
+      } else {
+        // 従来の方式（7日分全て）
+        final historyContext = _buildHistoryContext();
+        print('📚 過去の履歴をコンテキストに追加: ${historyContext.length}件');
+        
+        final conversationHistory = [
+          ...historyContext,
+          ..._messages.map((msg) {
+            return {
+              'role': msg.role == MessageRole.user ? 'user' : 'assistant',
+              'content': msg.content,
+            };
+          }).toList(),
+        ];
+        
+        print('💬 AIに送信する合計メッセージ数: ${conversationHistory.length}件');
+
+        final response = await _azureService.sendChatMessage(
+          messages: conversationHistory,
+          systemPrompt: _systemPrompt,
+        );
+
+        final assistantMessage = ChatMessage(
+          role: MessageRole.assistant,
+          content: response,
+          timestamp: DateTime.now(),
+        );
+        _messages.add(assistantMessage);
+      }
     } catch (e) {
       _errorMessage = 'エラーが発生しました: $e';
       print('送信エラー: $e');
@@ -214,50 +316,150 @@ class AzureChatController extends ChangeNotifier {
     _isLoading = true;
     notifyListeners();
 
-    // Firestoreに保存
-    await _saveChatMessage(userMessage);
+    // メッセージは即座にFirestoreに保存せず、トピック単位でまとめて保存
 
     try {
-      // 会話履歴を構築（過去の履歴 + 現在の会話）
-      final historyContext = _buildHistoryContext();
-      print('📚 過去の履歴をコンテキストに追加: ${historyContext.length}件');
-      
-      final conversationHistory = [
-        // 過去の履歴（要約版またはサンプリング）
-        ...historyContext,
-        // 現在の会話
-        ..._messages.map((msg) {
+      // キーワードベースの検索を使用する場合
+      if (_useKeywordSearch) {
+        print('');
+        print('════════════════════════════════════════════');
+        print('🚀 キーワードベース検索モード（ストリーミング）');
+        print('════════════════════════════════════════════');
+        
+        final keywords = await _extractKeywords(text);
+        
+        final relevantHistory = await _searchRelevantConversations(keywords);
+        
+        // 現在のトピックのメッセージのみを使用（新しいトピックの場合は空）
+        final currentTopicHistory = _currentTopicMessages.map((msg) {
           return {
             'role': msg.role == MessageRole.user ? 'user' : 'assistant',
             'content': msg.content,
           };
-        }).toList(),
-      ];
-      
-      print('💬 AIに送信する合計メッセージ数: ${conversationHistory.length}件');
+        }).toList();
+        
+        final conversationHistory = [
+          ...relevantHistory,
+          ...currentTopicHistory,
+          {'role': 'user', 'content': text}, // 現在のユーザーメッセージ
+        ];
+        
+        print('💬 AIに送信する合計メッセージ数: ${conversationHistory.length}件');
+        print('   - 関連する過去の会話: ${relevantHistory.length}件');
+        print('   - 現在のトピック: ${currentTopicHistory.length}件');
+        print('   - 今回のメッセージ: 1件');
+        print('');
 
-      // アシスタントメッセージの準備（空の状態で追加）
-      final assistantMessage = ChatMessage(
-        role: MessageRole.assistant,
-        content: '',
-        timestamp: DateTime.now(),
-      );
-      _messages.add(assistantMessage);
-      notifyListeners();
-
-      // ストリーミングでレスポンスを受信
-      await for (var chunk in _azureService.sendChatMessageStream(
-        messages: conversationHistory,
-        systemPrompt: _systemPrompt,
-      )) {
-        // チャンクを追加して更新
-        assistantMessage.content += chunk;
+        // アシスタントメッセージの準備（空の状態で追加）
+        final assistantMessage = ChatMessage(
+          role: MessageRole.assistant,
+          content: '',
+          timestamp: DateTime.now(),
+        );
+        _messages.add(assistantMessage);
         notifyListeners();
-      }
-      
-      // ストリーミング完了後にFirestoreに保存
-      if (assistantMessage.content.isNotEmpty) {
-        await _saveChatMessage(assistantMessage);
+
+        // ストリーミングでレスポンスを受信
+        await for (var chunk in _azureService.sendChatMessageStream(
+          messages: conversationHistory,
+          systemPrompt: _systemPrompt,
+        )) {
+          assistantMessage.content += chunk;
+          notifyListeners();
+        }
+        
+        if (assistantMessage.content.isNotEmpty) {
+          // 新しいトピックの場合、トピックIDを生成
+          if (_currentTopicId == null) {
+            _topicCounter++;
+            _currentTopicId = 'topic_$_topicCounter';
+            _currentTopicCharCount = 0;
+            print('🆕 新しいトピック開始: $_currentTopicId');
+          }
+          
+          // 現在のトピックに会話を追加
+          _currentTopicMessages.add(userMessage);
+          _currentTopicMessages.add(assistantMessage);
+          
+          // 文字数を累積
+          _currentTopicCharCount += userMessage.content.length + assistantMessage.content.length;
+          print('📝 現在のトピック文字数: $_currentTopicCharCount文字');
+          
+          // トピック変化を検出
+          final topicChanged = await _detectTopicChange(userMessage, assistantMessage);
+          
+          if (topicChanged) {
+            print('');
+            print('🔄 トピック変化を検出！前のトピックを保存します');
+            
+            // 前のトピックから今回の会話を除外して保存
+            if (_currentTopicMessages.length >= 2) {
+              _currentTopicMessages.removeLast(); // assistantMessage
+              _currentTopicMessages.removeLast(); // userMessage
+            }
+            
+            if (_currentTopicMessages.isNotEmpty && _currentTopicId != null) {
+              // 前のトピックを保存
+              await _saveTopicToFirestore();
+              // キーワードを保存
+              await _saveCurrentTopicKeywords();
+            }
+            
+            // 新しいトピックとして現在の会話をセット
+            _currentTopicMessages.clear();
+            _currentTopicMessages.add(userMessage);
+            _currentTopicMessages.add(assistantMessage);
+            _currentTopic = null;
+            _currentTopicId = null; // 次のメッセージで新しいIDを生成
+            _currentTopicCharCount = userMessage.content.length + assistantMessage.content.length;
+            
+            // 新しいトピックを保存
+            await _saveTopicToFirestore();
+          } else {
+            // トピック継続中 - トピックを保存
+            await _saveTopicToFirestore();
+            
+            if (_currentTopicCharCount >= _topicCharThreshold) {
+              // 3000文字超えたら中間保存
+              print('');
+              print('📏 トピックが長くなりました（$_currentTopicCharCount文字）- キーワードを中間保存します');
+              await _saveCurrentTopicKeywords(isIntermediate: true);
+              _currentTopicCharCount = 0; // リセット
+            }
+          }
+        }
+      } else {
+        // 従来の方式（7日分全て）
+        final historyContext = _buildHistoryContext();
+        print('📚 過去の履歴をコンテキストに追加: ${historyContext.length}件');
+        
+        final conversationHistory = [
+          ...historyContext,
+          ..._messages.map((msg) {
+            return {
+              'role': msg.role == MessageRole.user ? 'user' : 'assistant',
+              'content': msg.content,
+            };
+          }).toList(),
+        ];
+        
+        print('💬 AIに送信する合計メッセージ数: ${conversationHistory.length}件');
+
+        final assistantMessage = ChatMessage(
+          role: MessageRole.assistant,
+          content: '',
+          timestamp: DateTime.now(),
+        );
+        _messages.add(assistantMessage);
+        notifyListeners();
+
+        await for (var chunk in _azureService.sendChatMessageStream(
+          messages: conversationHistory,
+          systemPrompt: _systemPrompt,
+        )) {
+          assistantMessage.content += chunk;
+          notifyListeners();
+        }
       }
     } catch (e) {
       _errorMessage = 'エラーが発生しました: $e';
@@ -277,8 +479,20 @@ class AzureChatController extends ChangeNotifier {
 
   /// 会話履歴をクリア
   void clearMessages() {
+    // クリア前に最後のトピックのキーワードを保存
+    if (_currentTopicMessages.isNotEmpty) {
+      _saveCurrentTopicKeywords();
+    }
+    
     _messages.clear();
     _errorMessage = null;
+    
+    // トピック情報もクリア
+    _currentTopicMessages.clear();
+    _currentTopic = null;
+    _currentTopicId = null;
+    _currentTopicCharCount = 0;
+    
     notifyListeners();
   }
 
@@ -328,6 +542,518 @@ class AzureChatController extends ChangeNotifier {
   void setHistoryDays(int days) {
     _historyDays = days;
     _loadRecentHistory();
+  }
+
+  /// キーワードベース検索の有効/無効を切り替え
+  void setUseKeywordSearch(bool value) {
+    _useKeywordSearch = value;
+    notifyListeners();
+  }
+
+  /// テキストからキーワードを抽出
+  Future<List<String>> _extractKeywords(String text) async {
+    try {
+      print('');
+      print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+      print('🔍 キーワード抽出開始');
+      print('📝 入力テキスト: "$text"');
+      
+      final prompt = '''
+以下のテキストから、検索に適した実体的なキーワードを3〜8個抽出してください。
+
+【重要】必ず含めるべきキーワード:
+1. 話題のジャンル（スポーツ、趣味、技術、料理、ビジネス、エンターテイメントなど）
+2. 具体的な単語や固有名詞
+
+【抽出ルール】
+✅ 抽出すべきキーワード:
+- 話題のジャンル（必須）：スポーツ、趣味、技術、料理、音楽、映画、ゲーム、ビジネス、教育、健康など
+- 固有名詞（人名、地名、商品名など）
+- 具体的な物や概念（野球、サッカー、ゲーム、料理など）
+- 専門用語や特定の分野の言葉
+- 複合語は意味のある単位で分解（例：「システムプロンプト」→「システムプロンプト, システム, プロンプト」）
+
+❌ 避けるべき言葉:
+- 動詞（話す、見る、行くなど）
+- 形容詞・副詞（好き、嬉しい、とてもなど）
+- 一般的すぎる言葉（こと、もの、人など）
+- 意味のない2文字の分割（「シス」「テム」「プロ」「ンプ」など）
+
+【例】
+入力: 「野球選手の話したい」
+正しい出力: スポーツ, 野球選手, 野球, 選手
+
+入力: 「プロ野球の話しよう」
+正しい出力: スポーツ, プロ野球, プロ, 野球
+誤った出力: プロ野球, プロ, 野球, スポーツ, スポ, ーツ
+
+入力: 「最近マラソン始めました」
+正しい出力: スポーツ, 趣味, マラソン, ランニング, 運動
+
+入力: 「システムプロンプトを変更したい」
+正しい出力: 技術, システムプロンプト, システム, プロンプト, 設定
+誤った出力: システムプロンプト, シス, テム, プロ, ンプ
+
+入力: 「カレーの作り方を教えて」
+正しい出力: 料理, カレー, レシピ, 調理
+
+テキスト: $text
+
+重要: 「キーワード:」などのプレフィックスは不要です。カンマ区切りのキーワードのみを出力してください。''';
+
+      final response = await _azureService.sendChatMessage(
+        messages: [{'role': 'user', 'content': prompt}],
+        systemPrompt: 'あなたはテキスト分析の専門家です。余計な説明やプレフィックスは一切付けず、カンマ区切りのキーワードのみを出力してください。【重要】必ず話題のジャンル（スポーツ、趣味、技術、料理など）を最初に含めてください。複合語は意味のある単位で分解してください（例: 野球選手→スポーツ,野球選手,野球,選手）。意味のない2文字の分割は絶対にしないでください。',
+      );
+
+      print('🤖 AIの応答: "$response"');
+
+      // レスポンスからキーワードを抽出（カンマ区切り）
+      final step1 = response.replaceAll('\n', ',');
+      print('[DEBUG] step1 改行→カンマ: "$step1"');
+      
+      final step2 = step1.split(',');
+      print('[DEBUG] step2 split後: $step2');
+      
+      final keywords = step2
+          .map((k) => k.trim())
+          .map((k) {
+            // あらゆるプレフィックスパターンを削除
+            k = k.replaceAll(RegExp(r'^(キーワード|keyword|Keywords|出力|結果)[:：\s]*', caseSensitive: false), '');
+            // 数字と記号のプレフィックスを削除（1. や - など）
+            k = k.replaceAll(RegExp(r'^\d+[.．)\s]*'), '');
+            k = k.replaceAll(RegExp(r'^[-・*]\s*'), '');
+            // 句読点や記号を削除
+            k = k.replaceAll(RegExp('[。、.,!?！？\\s]+\$'), '');
+            // 前後のクォートを削除
+            k = k.replaceAll(RegExp('^[「『"\']'), '');
+            k = k.replaceAll(RegExp('[」』"\']\$'), '');
+            return k.trim();
+          })
+          .where((k) => k.isNotEmpty && k.length > 1) // 1文字のキーワードも除外
+          .toList();
+
+      print('✅ 抽出されたキーワード: ${keywords.join(", ")} (${keywords.length}個)');
+      print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+      print('');
+      
+      return keywords;
+    } catch (e) {
+      print('❌ キーワード抽出エラー: $e');
+      return [];
+    }
+  }
+
+  /// トピック変化を検出
+  Future<bool> _detectTopicChange(
+    ChatMessage userMessage,
+    ChatMessage assistantMessage,
+  ) async {
+    // 最初の会話の場合は変化なし
+    if (_currentTopicMessages.length <= 2) {
+      return false;
+    }
+    
+    try {
+      print('');
+      print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+      print('🔍 トピック変化検出');
+      
+      // 過去の会話の要約を作成
+      final previousConversation = _currentTopicMessages
+          .take(_currentTopicMessages.length - 2) // 今回の会話を除く
+          .map((m) => '${m.role == MessageRole.user ? "User" : "Assistant"}: ${m.content}')
+          .join('\n');
+      
+      final currentConversation = '''
+User: ${userMessage.content}
+Assistant: ${assistantMessage.content}''';
+      
+      final prompt = '''
+以下の2つの会話を比較して、話題の主題（メイントピック）が変わったかを判定してください。
+
+【これまでの話題】
+$previousConversation
+
+【今回の発言】
+$currentConversation
+
+判定基準（厳密に判定してください）:
+✅ YES（話題が変わった）の例:
+- 野球の話 → サッカーの話
+- 料理の話 → 旅行の話
+- 仕事の話 → 趣味の話
+- プログラミングの話 → 音楽の話
+- 全く異なる主題に切り替わった場合
+
+❌ NO（同じ話題の継続）の例:
+- 野球の話 → 同じく野球の別の側面（選手、チーム、ルール等）
+- 前の質問への返答や補足
+- 話題の掘り下げや関連する質問
+- 相槌や感想
+
+重要: 主題（メインテーマ）が明確に異なる場合はYESと判定してください。
+
+回答: YES または NO のみ''';
+
+      final response = await _azureService.sendChatMessage(
+        messages: [{'role': 'user', 'content': prompt}],
+        systemPrompt: 'あなたは会話の主題分類の専門家です。異なる主題への切り替えを正確に検出してください。「野球→サッカー」のような明確な主題の変化は必ずYESと判定してください。',
+      );
+      
+      print('🤖 AI判定: $response');
+      print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+      print('');
+      
+      // YES が含まれていればトピック変化と判定（大文字小文字を区別しない）
+      final topicChanged = response.toUpperCase().contains('YES');
+      
+      if (topicChanged) {
+        print('✅ トピック変化: あり');
+      } else {
+        print('➡️ トピック変化: なし（継続）');
+      }
+      
+      return topicChanged;
+    } catch (e) {
+      print('❌ トピック変化検出エラー: $e');
+      return false; // エラー時は変化なしとして継続
+    }
+  }
+
+  /// 現在のトピックのキーワードを保存
+  Future<void> _saveCurrentTopicKeywords({bool isIntermediate = false}) async {
+    if (_currentTopicMessages.isEmpty || _currentTopicId == null) return;
+    
+    try {
+      print('');
+      print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+      if (isIntermediate) {
+        print('� トピック中間 - キーワード保存開始');
+      } else {
+        print('🔑 トピック終了 - キーワード保存開始');
+      }
+      print('📊 対象会話数: ${_currentTopicMessages.length}件');
+      print('🏷️  トピックID: $_currentTopicId');
+      print('ℹ️  ※会話は既にトピックに保存済み、キーワードのみ保存します');
+      
+      // 会話全体からキーワードを抽出
+      final conversationText = _currentTopicMessages
+          .map((m) => m.content)
+          .join('\n');
+      
+      final keywords = await _extractKeywords(conversationText);
+      
+      if (keywords.isEmpty) {
+        print('⚠️ キーワードが抽出されませんでした');
+        print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        print('');
+        return;
+      }
+      
+      // キーワードから日付とトピックIDへの参照を保存
+      await _saveKeywordReferences(keywords);
+      
+      print('✅ キーワード保存完了');
+      print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+      print('');
+    } catch (e) {
+      print('❌ キーワード保存エラー: $e');
+    }
+  }
+  
+  /// トピックをFirestoreに保存
+  Future<void> _saveTopicToFirestore() async {
+    try {
+      print('[DEBUG] _saveTopicToFirestore 開始');
+      final user = _auth.currentUser;
+      print('[DEBUG] user: ${user?.uid}');
+      print('[DEBUG] _currentTopicId: $_currentTopicId');
+      print('[DEBUG] _currentTopicMessages.length: ${_currentTopicMessages.length}');
+      
+      if (user == null || _currentTopicId == null || _currentTopicMessages.isEmpty) {
+        print('[DEBUG] 早期リターン: user=$user, topicId=$_currentTopicId, messagesCount=${_currentTopicMessages.length}');
+        return;
+      }
+      
+      final dateStr = DateFormat('yyyyMMdd').format(DateTime.now());
+      print('[DEBUG] dateStr: $dateStr');
+      
+      // users/{uid}/chat/{chat_YYYYMMDD}/topics/{topic_id}
+      final topicRef = _firestore
+          .collection('users')
+          .doc(user.uid)
+          .collection('chat')
+          .doc('chat_$dateStr')
+          .collection('topics')
+          .doc(_currentTopicId!);
+      
+      final messagesData = _currentTopicMessages
+          .where((msg) => msg.content.isNotEmpty) // 空のメッセージを除外
+          .map((msg) {
+            print('[DEBUG] メッセージ変換: role=${msg.role}, contentLength=${msg.content.length}');
+            return {
+              'role': msg.role == MessageRole.user ? 'user' : 'assistant',
+              'content': msg.content,
+              'timestamp': Timestamp.fromDate(msg.timestamp),
+            };
+          }).toList();
+      
+      print('[DEBUG] messagesData.length: ${messagesData.length}');
+      
+      // メッセージが空の場合は保存しない
+      if (messagesData.isEmpty) {
+        print('⚠️ 保存するメッセージがありません');
+        return;
+      }
+      
+      print('[DEBUG] Firestore保存開始');
+      await topicRef.set({
+        'messages': messagesData,
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      
+      print('[DEBUG] Firestore保存完了');
+      print('✅ トピック保存完了: $_currentTopicId');
+    } catch (e, stackTrace) {
+      print('❌ トピック保存エラー: $e');
+      print('スタックトレース: $stackTrace');
+    }
+  }
+
+  /// キーワードから日付・トピックへの参照を保存
+  Future<void> _saveKeywordReferences(List<String> keywords) async {
+    try {
+      final user = _auth.currentUser;
+      if (user == null || keywords.isEmpty || _currentTopicId == null) return;
+
+      print('');
+      print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+      print('💾 キーワード参照保存開始');
+      print('📌 保存するキーワード: ${keywords.join(", ")}');
+
+      final dateStr = DateFormat('yyyyMMdd').format(DateTime.now());
+      print('📅 保存日付: $dateStr');
+      print('🏷️  トピックID: $_currentTopicId');
+
+      for (final keyword in keywords) {
+        print('');
+        print('  ▶ キーワード: "$keyword"');
+        
+        final keywordRef = _firestore
+            .collection('users')
+            .doc(user.uid)
+            .collection('keywords')
+            .doc(keyword);
+
+        final reference = {
+          'date': dateStr,
+          'topicId': _currentTopicId!,
+          'timestamp': Timestamp.fromDate(DateTime.now()),
+        };
+
+        final docSnapshot = await keywordRef.get();
+        
+        if (docSnapshot.exists) {
+          print('    ℹ️  既存のキーワード - 参照を追加');
+          await keywordRef.update({
+            'references': FieldValue.arrayUnion([reference]),
+            'lastUpdated': FieldValue.serverTimestamp(),
+          });
+          print('    ✅ 参照追加完了');
+        } else {
+          print('    🆕 新しいキーワード - 作成します');
+          await keywordRef.set({
+            'keyword': keyword,
+            'references': [reference],
+            'createdAt': FieldValue.serverTimestamp(),
+            'lastUpdated': FieldValue.serverTimestamp(),
+          });
+          print('    ✅ 作成完了');
+        }
+      }
+
+      print('');
+      print('✅ 全キーワード参照の保存完了');
+      print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+      print('');
+    } catch (e) {
+      print('❌ キーワード参照保存エラー: $e');
+    }
+  }
+
+  /// キーワードに基づいて関連する会話を検索（参照ベース）
+  Future<List<Map<String, String>>> _searchRelevantConversations(
+    List<String> keywords,
+  ) async {
+    try {
+      final user = _auth.currentUser;
+      if (user == null || keywords.isEmpty) {
+        return [];
+      }
+
+      print('');
+      print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+      print('🔎 関連会話の検索開始（完全一致 + 部分一致）');
+      print('🔑 検索キーワード: ${keywords.join(", ")}');
+
+      final relevantMessages = <Map<String, String>>[];
+      final addedTopics = <String, int>{}; // トピックとその優先度（1=完全一致, 2=部分一致）
+
+      // フェーズ1: 完全一致検索
+      print('');
+      print('📍 フェーズ1: 完全一致検索');
+      for (final keyword in keywords) {
+        print('  ▶ "$keyword" (完全一致)');
+        
+        final keywordRef = _firestore
+            .collection('users')
+            .doc(user.uid)
+            .collection('keywords')
+            .doc(keyword);
+
+        final docSnapshot = await keywordRef.get();
+        if (!docSnapshot.exists) {
+          print('    ⚠️  見つかりませんでした');
+          continue;
+        }
+
+        final data = docSnapshot.data();
+        final references = data?['references'] as List<dynamic>? ?? [];
+        print('    ✅ ${references.length}件の参照を発見');
+
+        // 最新の参照から最大3件まで
+        final recentReferences = references.reversed.take(3);
+        
+        for (var ref in recentReferences) {
+          final date = ref['date'] as String;
+          final topicId = ref['topicId'] as String;
+          final topicKey = '${date}_$topicId';
+          
+          if (!addedTopics.containsKey(topicKey)) {
+            addedTopics[topicKey] = 1; // 完全一致の優先度
+            print('    📌 追加: $topicKey (完全一致)');
+          }
+        }
+      }
+
+      // フェーズ2: 部分一致検索（完全一致で見つからなかったキーワードのみ）
+      print('');
+      print('📍 フェーズ2: 部分一致検索');
+      
+      // すべてのキーワードドキュメントを取得
+      final allKeywordsSnapshot = await _firestore
+          .collection('users')
+          .doc(user.uid)
+          .collection('keywords')
+          .get();
+      
+      print('  📚 保存済みキーワード総数: ${allKeywordsSnapshot.docs.length}個');
+
+      for (final keyword in keywords) {
+        print('  ▶ "$keyword" の部分一致を検索中...');
+        
+        int partialMatchCount = 0;
+        for (var keywordDoc in allKeywordsSnapshot.docs) {
+          final savedKeyword = keywordDoc.id;
+          
+          // 部分一致チェック（完全一致は除外）
+          if (savedKeyword != keyword && savedKeyword.contains(keyword)) {
+            print('    🔍 部分一致発見: "$savedKeyword"');
+            
+            final data = keywordDoc.data();
+            final references = data['references'] as List<dynamic>? ?? [];
+            
+            // 最新の参照から最大2件まで（部分一致は控えめに）
+            final recentReferences = references.reversed.take(2);
+            
+            for (var ref in recentReferences) {
+              final date = ref['date'] as String;
+              final topicId = ref['topicId'] as String;
+              final topicKey = '${date}_$topicId';
+              
+              if (!addedTopics.containsKey(topicKey)) {
+                addedTopics[topicKey] = 2; // 部分一致の優先度
+                print('      📌 追加: $topicKey (部分一致)');
+                partialMatchCount++;
+              }
+            }
+          }
+        }
+        
+        if (partialMatchCount == 0) {
+          print('    ⚠️  部分一致も見つかりませんでした');
+        } else {
+          print('    ✅ ${partialMatchCount}件のトピックを追加');
+        }
+      }
+
+      // トピックを優先度順にソート（完全一致を優先）
+      final sortedTopics = addedTopics.entries.toList()
+        ..sort((a, b) => a.value.compareTo(b.value));
+
+      print('');
+      print('📊 検索結果サマリー:');
+      print('  - 完全一致トピック: ${addedTopics.values.where((v) => v == 1).length}個');
+      print('  - 部分一致トピック: ${addedTopics.values.where((v) => v == 2).length}個');
+      print('  - 合計: ${sortedTopics.length}個');
+
+      // トピックの会話を取得
+      print('');
+      print('📖 トピックの会話を取得中...');
+      for (var entry in sortedTopics) {
+        final topicKey = entry.key;
+        final priority = entry.value;
+        final parts = topicKey.split('_');
+        final date = parts[0];
+        final topicId = parts[1];
+        
+        final matchType = priority == 1 ? '完全一致' : '部分一致';
+        print('  ▶ $topicKey ($matchType)');
+
+        final topicRef = _firestore
+            .collection('users')
+            .doc(user.uid)
+            .collection('chat')
+            .doc('chat_$date')
+            .collection('topics')
+            .doc(topicId);
+        
+        final topicSnapshot = await topicRef.get();
+        if (!topicSnapshot.exists) {
+          print('    ⚠️  トピックが見つかりません');
+          continue;
+        }
+        
+        final topicData = topicSnapshot.data();
+        final messages = topicData?['messages'] as List<dynamic>? ?? [];
+        
+        print('    ✅ ${messages.length}メッセージを追加');
+        
+        for (var msg in messages) {
+          final role = msg['role'] as String;
+          final content = msg['content'] as String;
+          
+          relevantMessages.add({
+            'role': role,
+            'content': content,
+          });
+        }
+      }
+
+      print('');
+      print('✅ 検索完了');
+      print('📚 取得した関連メッセージ総数: ${relevantMessages.length}件');
+      print('💬 トピック数: ${sortedTopics.length}個');
+      print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+      print('');
+      
+      return relevantMessages;
+    } catch (e) {
+      print('❌ 会話検索エラー: $e');
+      return [];
+    }
   }
 
   /// チャットメッセージをFirestoreに保存

@@ -5,8 +5,18 @@ service cloud.firestore {
     match /users/{userId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
       
-      // チャット履歴
+      // チャット履歴（トピック構造）
       match /chat/{chatId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+        
+        // トピックサブコレクション
+        match /topics/{topicId} {
+          allow read, write: if request.auth != null && request.auth.uid == userId;
+        }
+      }
+      
+      // キーワード（会話検索用）
+      match /keywords/{keyword} {
         allow read, write: if request.auth != null && request.auth.uid == userId;
       }
       

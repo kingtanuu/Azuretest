@@ -3,9 +3,11 @@
 
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class SimpleAuthController {
   final FirebaseAuth _auth = FirebaseAuth.instance;
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
   /// 現在のユーザーを取得
   User? get currentUser => _auth.currentUser;
@@ -27,6 +29,9 @@ class SimpleAuthController {
         email: email.trim(),
         password: password,
       );
+      
+      // Firestoreにユーザードキュメントを作成（存在しない場合）
+      await _initializeUserDocument();
       
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -106,6 +111,9 @@ class SimpleAuthController {
         password: password,
       );
       
+      // Firestoreにユーザードキュメントを作成
+      await _initializeUserDocument();
+      
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -143,6 +151,31 @@ class SimpleAuthController {
         );
       }
       return false;
+    }
+  }
+
+  /// Firestoreにユーザードキュメントを初期化
+  Future<void> _initializeUserDocument() async {
+    try {
+      final user = _auth.currentUser;
+      if (user == null) return;
+
+      final userRef = _firestore.collection('users').doc(user.uid);
+      final docSnapshot = await userRef.get();
+
+      if (!docSnapshot.exists) {
+        // ユーザードキュメントが存在しない場合は作成
+        await userRef.set({
+          'email': user.email,
+          'createdAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+        print('✅ ユーザードキュメント作成: ${user.uid}');
+      } else {
+        print('ℹ️ ユーザードキュメント既存: ${user.uid}');
+      }
+    } catch (e) {
+      print('❌ ユーザードキュメント初期化エラー: $e');
     }
   }
 
