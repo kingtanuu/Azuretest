@@ -82,7 +82,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                 ),
                                 TextButton(
                                   onPressed: () {
-                                    controller.clearMessages();
+                                    controller.clearConversation();
                                     Navigator.pop(context);
                                   },
                                   child: const Text('削除'),
@@ -123,7 +123,9 @@ class _ChatScreenState extends State<ChatScreen> {
                         ),
                         IconButton(
                           icon: const Icon(Icons.close, size: 20),
-                          onPressed: controller.clearError,
+                          onPressed: () {
+                            controller.clearConversation();
+                          },
                         ),
                       ],
                     ),
