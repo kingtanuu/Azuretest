@@ -1,15 +1,15 @@
-// lib/azure_test/main.dart
-/// Azure OpenAI チャット機能のテスト用エントリーポイント
+// lib/mutimon_chat/v1/main.dart
+/// Mutimon Chat Application エントリーポイント
 /// 
 /// 実行方法:
-/// flutter run -t lib/azure_test/main.dart -d chrome
+/// flutter run -t lib/mutimon_chat/v1/main.dart -d chrome --dart-define=AZURE_OPENAI_API_KEY=your_api_key
 
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import '../firebase_options.dart';
-import 'login_screen.dart';
-import 'azure_chat_screen.dart';
+import 'firebase_options.dart';
+import 'auth/login_screen.dart';
+import 'chat/chat_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -48,7 +48,7 @@ class AzureTestApp extends StatelessWidget {
           
           if (snapshot.hasData) {
             // ログイン済み → チャット画面へ
-            return const AzureChatScreen();
+            return const ChatScreen();
           } else {
             // 未ログイン → ログイン画面へ
             return const SimpleLoginScreen();

@@ -1,10 +1,10 @@
-// lib/azure_test/auth_controller.dart
-/// 簡易版認証コントローラー
+// lib/mutimon_chat/v1/auth/auth_controller.dart
+/// 認証コントローラー
 
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
-class SimpleAuthController {
+class AuthController {
   final FirebaseAuth _auth = FirebaseAuth.instance;
 
   /// 現在のユーザーを取得

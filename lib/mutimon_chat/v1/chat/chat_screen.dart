@@ -1,21 +1,21 @@
-// lib/azure_test/azure_chat_screen.dart
-/// Azure OpenAI を使用したチャット画面
+// lib/mutimon_chat/v1/chat/chat_screen.dart
+/// チャット画面
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'azure_chat_controller.dart';
-import 'models.dart';
-import 'auth_controller.dart';
+import 'chat_controller.dart';
+import '../models/models.dart';
+import '../auth/auth_controller.dart';
 
-class AzureChatScreen extends StatefulWidget {
-  const AzureChatScreen({super.key});
+class ChatScreen extends StatefulWidget {
+  const ChatScreen({super.key});
 
   @override
-  State<AzureChatScreen> createState() => _AzureChatScreenState();
+  State<ChatScreen> createState() => _ChatScreenState();
 }
 
-class _AzureChatScreenState extends State<AzureChatScreen> {
+class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _textController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
 
@@ -41,7 +41,7 @@ class _AzureChatScreenState extends State<AzureChatScreen> {
   @override
   Widget build(BuildContext context) {
     return ChangeNotifierProvider(
-      create: (_) => AzureChatController(),
+      create: (_) => ChatController(),
       child: Scaffold(
         appBar: AppBar(
           title: const Text('Azure OpenAI チャット'),
@@ -50,7 +50,7 @@ class _AzureChatScreenState extends State<AzureChatScreen> {
             IconButton(
               icon: const Icon(Icons.logout),
               onPressed: () async {
-                await SimpleAuthController().signOut();
+                await AuthController().signOut();
                 if (context.mounted) {
                   Navigator.of(context).pushReplacementNamed('/');
                 }
@@ -63,7 +63,7 @@ class _AzureChatScreenState extends State<AzureChatScreen> {
               onPressed: () => _showSystemPromptDialog(context),
             ),
             // 会話クリアボタン
-            Consumer<AzureChatController>(
+            Consumer<ChatController>(
               builder: (context, controller, _) {
                 return IconButton(
                   icon: const Icon(Icons.delete_outline),
@@ -96,7 +96,7 @@ class _AzureChatScreenState extends State<AzureChatScreen> {
             ),
           ],
         ),
-        body: Consumer<AzureChatController>(
+        body: Consumer<ChatController>(
           builder: (context, controller, _) {
             // メッセージが更新されたら自動スクロール
             if (controller.messages.isNotEmpty) {
@@ -246,7 +246,7 @@ class _AzureChatScreenState extends State<AzureChatScreen> {
   }
 
   void _showSystemPromptDialog(BuildContext context) {
-    final controller = Provider.of<AzureChatController>(context, listen: false);
+    final controller = Provider.of<ChatController>(context, listen: false);
     final textController = TextEditingController(text: controller.systemPrompt);
 
     showDialog(
