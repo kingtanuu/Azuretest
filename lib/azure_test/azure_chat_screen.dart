@@ -46,23 +46,6 @@ class _AzureChatScreenState extends State<AzureChatScreen> {
         appBar: AppBar(
           title: const Text('Azure OpenAI チャット'),
           actions: [
-            // テストデータ追加ボタン (開発用)
-            Consumer<AzureChatController>(
-              builder: (context, controller, _) {
-                return IconButton(
-                  icon: const Icon(Icons.add_box),
-                  onPressed: () async {
-                    await controller.addTestHistoryData();
-                    if (context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('テストデータを追加しました。リロードしてください。')),
-                      );
-                    }
-                  },
-                  tooltip: 'テストデータ追加',
-                );
-              },
-            ),
             // ログアウトボタン
             IconButton(
               icon: const Icon(Icons.logout),
