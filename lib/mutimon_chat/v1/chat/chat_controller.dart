@@ -1,15 +1,15 @@
-// lib/azure_test/azure_chat_controller.dart
-/// Azure OpenAI を使用したシンプルなチャットコントローラー
+// lib/mutimon_chat/v1/chat/chat_controller.dart
+/// チャットコントローラー
 
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
-import 'azure_openai_service.dart';
-import 'models.dart';
+import 'openai_service.dart';
+import '../models/models.dart';
 
-class AzureChatController extends ChangeNotifier {
-  final AzureOpenAIService _azureService = AzureOpenAIService();
+class ChatController extends ChangeNotifier {
+  final OpenAIService _azureService = OpenAIService();
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
   

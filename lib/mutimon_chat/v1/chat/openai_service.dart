@@ -1,10 +1,10 @@
-// lib/azure_test/azure_openai_service.dart
+// lib/mutimon_chat/v1/chat/openai_service.dart
 /// Azure OpenAI Service との連携を行うサービス
 
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 
-class AzureOpenAIService {
+class OpenAIService {
   // Azure OpenAI の設定
   static const String _endpoint = 'https://fintuning-test.cognitiveservices.azure.com';
   // APIキーは環境変数から取得（セキュリティのため）
