@@ -1,9 +1,9 @@
-// lib/azure_test/login_screen.dart
-/// Azure Test用の簡易ログイン画面
+// lib/mutimon_chat/v1/auth/login_screen.dart
+/// 認証用ログイン画面
 
 import 'package:flutter/material.dart';
 import 'auth_controller.dart';
-import 'azure_chat_screen.dart';
+import '../chat/chat_screen.dart';
 
 class SimpleLoginScreen extends StatefulWidget {
   const SimpleLoginScreen({super.key});
@@ -15,7 +15,7 @@ class SimpleLoginScreen extends StatefulWidget {
 class _SimpleLoginScreenState extends State<SimpleLoginScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
-  final _authController = SimpleAuthController();
+  final _authController = AuthController();
   bool _isLoading = false;
 
   @override
@@ -50,7 +50,7 @@ class _SimpleLoginScreenState extends State<SimpleLoginScreen> {
       // ログイン成功したらチャット画面へ
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(
-          builder: (context) => const AzureChatScreen(),
+          builder: (context) => const ChatScreen(),
         ),
       );
     }
