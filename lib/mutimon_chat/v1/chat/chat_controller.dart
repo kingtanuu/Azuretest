@@ -45,19 +45,35 @@ class ChatController extends ChangeNotifier {
 
       final dateStr = DateFormat('yyyyMMdd').format(DateTime.now());
       
+      // ベクトル埋め込みを取得
+      List<double>? embedding;
+      try {
+        embedding = await _azureService.getEmbedding(message.content);
+      } catch (e) {
+        print('⚠️ Embedding取得エラー: $e');
+        // Embeddingの取得に失敗してもメッセージは保存する
+      }
+      
+      final messageData = {
+        'role': message.role == MessageRole.user ? 'user' : 'assistant',
+        'content': message.content,
+        'timestamp': FieldValue.serverTimestamp(),
+      };
+      
+      // Embeddingが取得できた場合は追加
+      if (embedding != null) {
+        messageData['embedding_field'] = embedding;
+      }
+      
       await _firestore
           .collection('users')
           .doc(user.uid)
           .collection('chats')
           .doc('chat_$dateStr')
           .collection('messages')
-          .add({
-        'role': message.role == MessageRole.user ? 'user' : 'assistant',
-        'content': message.content,
-        'timestamp': FieldValue.serverTimestamp(),
-      });
+          .add(messageData);
       
-      print('💾 メッセージを保存しました');
+      print('💾 メッセージを保存しました${embedding != null ? '（Embedding含む）' : ''}');
     } catch (e) {
       print('メッセージ保存エラー: $e');
     }
