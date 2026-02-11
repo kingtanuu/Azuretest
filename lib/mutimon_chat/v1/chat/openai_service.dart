@@ -10,7 +10,7 @@ class OpenAIService {
   // APIキーは環境変数から取得（セキュリティのため）
   static const String _apiKey = String.fromEnvironment('AZURE_OPENAI_API_KEY', 
     defaultValue: 'YOUR_API_KEY_HERE');
-  static const String _deployment = 'gpt-4.1-mini';
+  static const String _deployment = '1-mini-2025-04-14-A-question-v05-new-system-prompt';
   static const String _apiVersion = '2025-01-01-preview';
 
   /// チャットメッセージを送信して応答を取得
@@ -187,5 +187,43 @@ class OpenAIService {
       ],
       systemPrompt: systemPrompt,
     );
+  }
+
+  /// テキストのベクトル埋め込みを取得（OpenAI API使用）
+  /// 
+  /// [text] 埋め込みを取得するテキスト
+  /// returns 1536次元のベクトル配列
+  Future<List<double>> getEmbedding(String text) async {
+    try {
+      // OpenAI APIキーを環境変数から取得
+      const openaiApiKey = String.fromEnvironment('OPENAI_API_KEY', 
+        defaultValue: 'YOUR_OPENAI_API_KEY_HERE');
+      
+      final url = Uri.parse('https://api.openai.com/v1/embeddings');
+
+      final response = await http.post(
+        url,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $openaiApiKey',
+        },
+        body: jsonEncode({
+          'input': text,
+          'model': 'text-embedding-3-small',
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final embedding = List<double>.from(data['data'][0]['embedding']);
+        return embedding;
+      } else {
+        final errorBody = response.body;
+        throw Exception('OpenAI Embedding API エラー (${response.statusCode}): $errorBody');
+      }
+    } catch (e) {
+      print('OpenAI Embedding エラー: $e');
+      rethrow;
+    }
   }
 }
