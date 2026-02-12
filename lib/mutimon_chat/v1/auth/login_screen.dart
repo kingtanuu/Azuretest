@@ -3,7 +3,6 @@
 
 import 'package:flutter/material.dart';
 import 'auth_controller.dart';
-import '../chat/chat_screen.dart';
 
 class SimpleLoginScreen extends StatefulWidget {
   const SimpleLoginScreen({super.key});
@@ -27,6 +26,7 @@ class _SimpleLoginScreenState extends State<SimpleLoginScreen> {
 
   Future<void> _handleLogin() async {
     if (_emailController.text.isEmpty || _passwordController.text.isEmpty) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('メールアドレスとパスワードを入力してください'),
@@ -36,6 +36,7 @@ class _SimpleLoginScreenState extends State<SimpleLoginScreen> {
       return;
     }
 
+    if (!mounted) return;
     setState(() => _isLoading = true);
 
     final success = await _authController.signIn(
@@ -44,16 +45,12 @@ class _SimpleLoginScreenState extends State<SimpleLoginScreen> {
       password: _passwordController.text,
     );
 
-    setState(() => _isLoading = false);
-
-    if (success && mounted) {
-      // ログイン成功したらチャット画面へ
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(
-          builder: (context) => const ChatScreen(),
-        ),
-      );
+    if (mounted) {
+      setState(() => _isLoading = false);
     }
+
+    // ログイン成功時は、FirebaseAuth.authStateChanges()が
+    // 自動的にチャット画面に遷移させるため、手動遷移は不要
   }
 
   @override
