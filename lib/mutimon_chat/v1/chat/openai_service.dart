@@ -9,8 +9,8 @@ class OpenAIService {
   static const String _endpoint = 'https://fintuning-test.cognitiveservices.azure.com';
   // APIキーは環境変数から取得（セキュリティのため）
   static const String _apiKey = String.fromEnvironment('AZURE_OPENAI_API_KEY', 
-    defaultValue: 'YOUR_API_KEY_HERE');
-  static const String _deployment = 'gpt-4.1-mini';
+    defaultValue: 'CMyjcU1FyXKkYehfCsjChk0AxCuMCpVUZN1wOcwhv60D2Jwf5KpaJQQJ99CBACi0881XJ3w3AAAAACOGQkG7');
+  static const String _deployment = '1-mini-2025-04-14-A-question-v06';
   static const String _apiVersion = '2025-01-01-preview';
 
   /// チャットメッセージを送信して応答を取得
