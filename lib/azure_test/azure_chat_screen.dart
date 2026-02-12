@@ -1,21 +1,21 @@
-// lib/mutimon_chat/v1/chat/chat_screen.dart
-/// チャット画面
+// lib/azure_test/azure_chat_screen.dart
+/// Azure OpenAI を使用したチャット画面
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'chat_controller.dart';
-import '../models/models.dart';
-import '../auth/auth_controller.dart';
+import 'azure_chat_controller.dart';
+import 'models.dart';
+import 'auth_controller.dart';
 
-class ChatScreen extends StatefulWidget {
-  const ChatScreen({super.key});
+class AzureChatScreen extends StatefulWidget {
+  const AzureChatScreen({super.key});
 
   @override
-  State<ChatScreen> createState() => _ChatScreenState();
+  State<AzureChatScreen> createState() => _AzureChatScreenState();
 }
 
-class _ChatScreenState extends State<ChatScreen> {
+class _AzureChatScreenState extends State<AzureChatScreen> {
   final TextEditingController _textController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
 
@@ -41,7 +41,7 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   Widget build(BuildContext context) {
     return ChangeNotifierProvider(
-      create: (_) => ChatController(),
+      create: (_) => AzureChatController(),
       child: Scaffold(
         appBar: AppBar(
           title: const Text('Azure OpenAI チャット'),
@@ -50,27 +50,9 @@ class _ChatScreenState extends State<ChatScreen> {
             IconButton(
               icon: const Icon(Icons.logout),
               onPressed: () async {
-                final shouldLogout = await showDialog<bool>(
-                  context: context,
-                  builder: (context) => AlertDialog(
-                    title: const Text('ログアウト'),
-                    content: const Text('ログアウトしますか？'),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(context, false),
-                        child: const Text('キャンセル'),
-                      ),
-                      TextButton(
-                        onPressed: () => Navigator.pop(context, true),
-                        child: const Text('ログアウト'),
-                      ),
-                    ],
-                  ),
-                );
-                
-                if (shouldLogout == true) {
-                  await AuthController().signOut();
-                  // FirebaseAuth.authStateChanges()が自動的にログイン画面に遷移させます
+                await SimpleAuthController().signOut();
+                if (context.mounted) {
+                  Navigator.of(context).pushReplacementNamed('/');
                 }
               },
               tooltip: 'ログアウト',
@@ -81,7 +63,7 @@ class _ChatScreenState extends State<ChatScreen> {
               onPressed: () => _showSystemPromptDialog(context),
             ),
             // 会話クリアボタン
-            Consumer<ChatController>(
+            Consumer<AzureChatController>(
               builder: (context, controller, _) {
                 return IconButton(
                   icon: const Icon(Icons.delete_outline),
@@ -100,7 +82,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                 ),
                                 TextButton(
                                   onPressed: () {
-                                    controller.clearConversation();
+                                    controller.clearMessages();
                                     Navigator.pop(context);
                                   },
                                   child: const Text('削除'),
@@ -114,7 +96,7 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
           ],
         ),
-        body: Consumer<ChatController>(
+        body: Consumer<AzureChatController>(
           builder: (context, controller, _) {
             // メッセージが更新されたら自動スクロール
             if (controller.messages.isNotEmpty) {
@@ -141,9 +123,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         ),
                         IconButton(
                           icon: const Icon(Icons.close, size: 20),
-                          onPressed: () {
-                            controller.clearConversation();
-                          },
+                          onPressed: controller.clearError,
                         ),
                       ],
                     ),
@@ -266,7 +246,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _showSystemPromptDialog(BuildContext context) {
-    final controller = Provider.of<ChatController>(context, listen: false);
+    final controller = Provider.of<AzureChatController>(context, listen: false);
     final textController = TextEditingController(text: controller.systemPrompt);
 
     showDialog(
