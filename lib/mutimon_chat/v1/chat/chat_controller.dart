@@ -185,11 +185,12 @@ class ChatController extends ChangeNotifier {
     notifyListeners();
 
     try {
-      // ベクトル検索で類似した過去の会話を取得（保存前に実行して自分の発言を除外）
-      final similarMessages = await _getSimilarMessages(text);
-
-      // Firestoreに保存
-      await _saveChatMessage(userMessage);
+      // ベクトル検索とFirestore保存を並列実行して高速化
+      final waitResults = await Future.wait([
+        _getSimilarMessages(text),
+        _saveChatMessage(userMessage).then((_) => <Map<String, dynamic>>[]),
+      ]);
+      final similarMessages = waitResults[0];
       
       // システムプロンプトに過去の会話の要約を追加
       String enhancedSystemPrompt = _systemPrompt;
@@ -275,11 +276,12 @@ class ChatController extends ChangeNotifier {
     notifyListeners();
 
     try {
-      // ベクトル検索で類似した過去の会話を取得（保存前に実行して自分の発言を除外）
-      final similarMessages = await _getSimilarMessages(text);
-
-      // Firestoreに保存
-      await _saveChatMessage(userMessage);
+      // ベクトル検索とFirestore保存を並列実行して高速化
+      final waitResults = await Future.wait([
+        _getSimilarMessages(text),
+        _saveChatMessage(userMessage).then((_) => <Map<String, dynamic>>[]),
+      ]);
+      final similarMessages = waitResults[0];
       
       // システムプロンプトに過去の会話の要約を追加
       String enhancedSystemPrompt = _systemPrompt;
