@@ -95,7 +95,8 @@ export const getNearestNeighbor = onRequest(
         const embField = data.embedding_field;
         logger.info(
           `  Sample path: ${doc.ref.path}, ` +
-          `embedding_field: ${embField ? `array[${embField.length}]` : "missing"}`,
+          `embedding_field: ${embField ?
+            `array[${embField.length}]` : "missing"}`,
         );
       });
 
@@ -107,6 +108,7 @@ export const getNearestNeighbor = onRequest(
           distanceMeasure: "COSINE",
           vectorField: "embedding_field",
           queryVector: vector,
+          distanceResultField: "vector_distance", // 距離をデータ内に保存
         });
 
       const snapshot = await vectorQuery.get();
@@ -158,15 +160,15 @@ export const getNearestNeighbor = onRequest(
       // レスポンスを構築
       const results = limitedDocs.map((doc) => {
         const data = doc.data();
-        const docWithDistance = doc as admin.firestore.DocumentSnapshot & {
-          distance?: number;
-        };
+        // distanceResultField で保存された距離を取得
+        const distance = typeof data.vector_distance === "number" ?
+          data.vector_distance : null;
         return {
           id: doc.id,
           role: data.role,
           content: data.content,
           timestamp: data.timestamp?.toDate?.()?.toISOString() || null,
-          distance: docWithDistance.distance || 0,
+          distance,
         };
       });
 

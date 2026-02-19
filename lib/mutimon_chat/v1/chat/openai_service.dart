@@ -5,13 +5,12 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 class OpenAIService {
-  // Azure OpenAI の設定
-  static const String _endpoint = 'https://fintuning-test.cognitiveservices.azure.com';
+  // OpenAI の設定
+  static const String _endpoint = 'https://api.openai.com/v1';
   // APIキーは環境変数から取得（セキュリティのため）
-  static const String _apiKey = String.fromEnvironment('AZURE_OPENAI_API_KEY', 
-    defaultValue: 'CMyjcU1FyXKkYehfCsjChk0AxCuMCpVUZN1wOcwhv60D2Jwf5KpaJQQJ99CBACi0881XJ3w3AAAAACOGQkG7');
-  static const String _deployment = '1-mini-2025-04-14-A-question-v06';
-  static const String _apiVersion = '2025-01-01-preview';
+  static const String _apiKey = String.fromEnvironment('OPENAI_API_KEY', 
+    defaultValue: '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');
+  static const String _model = 'ft:gpt-4.1-mini-2025-04-14:personal:v1:DAl3Pv3f';
 
   /// チャットメッセージを送信して応答を取得
   /// 
@@ -37,15 +36,14 @@ class OpenAIService {
       fullMessages.addAll(messages);
 
       // リクエストURL
-      final url = Uri.parse(
-        '$_endpoint/openai/deployments/$_deployment/chat/completions?api-version=$_apiVersion',
-      );
+      final url = Uri.parse('$_endpoint/chat/completions');
 
       // リクエストボディ
       final body = jsonEncode({
+        'model': _model,
         'messages': fullMessages,
         'temperature': temperature,
-        'max_completion_tokens': maxTokens,
+        'max_tokens': maxTokens,
         'top_p': 1.0,
         'frequency_penalty': 0.0,
         'presence_penalty': 0.0,
@@ -56,7 +54,7 @@ class OpenAIService {
         url,
         headers: {
           'Content-Type': 'application/json',
-          'api-key': _apiKey,
+          'Authorization': 'Bearer $_apiKey',
         },
         body: body,
       );
@@ -73,11 +71,11 @@ class OpenAIService {
       } else {
         final errorData = jsonDecode(utf8.decode(response.bodyBytes));
         throw Exception(
-          'Azure OpenAI API エラー (${response.statusCode}): ${errorData['error']?['message'] ?? '不明なエラー'}',
+          'OpenAI API エラー (${response.statusCode}): ${errorData['error']?['message'] ?? '不明なエラー'}',
         );
       }
     } catch (e) {
-      print('Azure OpenAI Service エラー: $e');
+      print('OpenAI Service エラー: $e');
       rethrow;
     }
   }
@@ -108,15 +106,14 @@ class OpenAIService {
       fullMessages.addAll(messages);
 
       // リクエストURL
-      final url = Uri.parse(
-        '$_endpoint/openai/deployments/$_deployment/chat/completions?api-version=$_apiVersion',
-      );
+      final url = Uri.parse('$_endpoint/chat/completions');
 
       // リクエストボディ（ストリーミング有効）
       final body = jsonEncode({
+        'model': _model,
         'messages': fullMessages,
         'temperature': temperature,
-        'max_completion_tokens': maxTokens,
+        'max_tokens': maxTokens,
         'top_p': 1.0,
         'frequency_penalty': 0.0,
         'presence_penalty': 0.0,
@@ -127,7 +124,7 @@ class OpenAIService {
       final request = http.Request('POST', url);
       request.headers.addAll({
         'Content-Type': 'application/json',
-        'api-key': _apiKey,
+        'Authorization': 'Bearer $_apiKey',
       });
       request.body = body;
 
@@ -164,11 +161,11 @@ class OpenAIService {
         final errorBody = await streamedResponse.stream.bytesToString();
         final errorData = jsonDecode(errorBody);
         throw Exception(
-          'Azure OpenAI API エラー (${streamedResponse.statusCode}): ${errorData['error']?['message'] ?? '不明なエラー'}',
+          'OpenAI API エラー (${streamedResponse.statusCode}): ${errorData['error']?['message'] ?? '不明なエラー'}',
         );
       }
     } catch (e) {
-      print('Azure OpenAI Service ストリーミングエラー: $e');
+      print('OpenAI Service ストリーミングエラー: $e');
       rethrow;
     }
   }

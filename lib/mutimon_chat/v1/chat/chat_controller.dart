@@ -62,6 +62,7 @@ class ChatController extends ChangeNotifier {
         'content': message.content,
         'timestamp': FieldValue.serverTimestamp(),
       };
+    
       
       // Embeddingが取得できた場合はVector型として追加
       if (embedding != null) {
@@ -183,25 +184,38 @@ class ChatController extends ChangeNotifier {
     _isLoading = true;
     notifyListeners();
 
-    // Firestoreに保存
-    await _saveChatMessage(userMessage);
-
     try {
-      // ベクトル検索で類似した過去の会話を取得
+      // ベクトル検索で類似した過去の会話を取得（保存前に実行して自分の発言を除外）
       final similarMessages = await _getSimilarMessages(text);
+
+      // Firestoreに保存
+      await _saveChatMessage(userMessage);
       
-      // 類似メッセージをコンテキストとして追加
-      String contextPrompt = '';
-      if (similarMessages.isNotEmpty) {
-        print('💡 コンテキスト追加: ${similarMessages.length}件の過去の会話を参照');
-        contextPrompt = '\n\n過去の関連する会話:\n';
-        for (var msg in similarMessages) {
-          contextPrompt += '- ${msg['role']}: ${msg['content']}\n';
+      // システムプロンプトに過去の会話の要約を追加
+      String enhancedSystemPrompt = _systemPrompt;
+      // 低類似（距離0.6以上）を除外
+      final relevantMessages = similarMessages.where((msg) {
+        final d = (msg['distance'] as num?)?.toDouble();
+        return d == null || d < 0.6;
+      }).toList();
+      if (relevantMessages.isNotEmpty) {
+        print('💡 コンテキスト追加: ${relevantMessages.length}件（低類似除外後、元: ${similarMessages.length}件）');
+        
+        String contextSummary = '\n\n## ユーザーについて知っていること（過去の会話より）\n';
+        contextSummary += '以下はこのユーザーの好みや発言の記録です。\n';
+        contextSummary += '返答する際は、ユーザーの好みを今の話題に自然に結びつけてください。\n';
+        contextSummary += '「オリンピック」の話題なら「野球はオリンピックで見る？」のように過去の好みを絡めてください。\n\n';
+        for (var msg in relevantMessages) {
+          final role = msg['role'] == 'user' ? 'ユーザー' : 'ムチモン';
+          contextSummary += '- $role: "${msg['content']}"\n';
         }
-        contextPrompt += '\n上記の過去の会話を参考にして、文脈に沿った返答をしてください。';
+        contextSummary += '\n【必須】一般的な質問（「どの競技が好き？」等）はしないこと。必ず上記の過去情報と今の話題を結びつけた返答をすること。';
+        enhancedSystemPrompt += contextSummary;
+        print('📝 システムプロンプトへの追加内容:\n$contextSummary');
       } else {
-        print('💡 コンテキスト追加: なし（通常の会話として処理）');
+        print('💡 コンテキスト追加: なし（低類似除外後0件 or 元々なし）');
       }
+      
       // 会話履歴を構築
       final conversationHistory = _messages.map((msg) {
         return {
@@ -209,9 +223,6 @@ class ChatController extends ChangeNotifier {
           'content': msg.content,
         };
       }).toList();
-
-      // システムプロンプトにコンテキストを追加
-      final enhancedSystemPrompt = _systemPrompt + contextPrompt;
 
       // Azure OpenAI にリクエスト
       final response = await _azureService.sendChatMessage(
@@ -254,9 +265,6 @@ class ChatController extends ChangeNotifier {
     _isLoading = true;
     notifyListeners();
 
-    // Firestoreに保存
-    await _saveChatMessage(userMessage);
-
     // アシスタントの応答用のメッセージを準備
     final assistantMessage = ChatMessage(
       role: MessageRole.assistant,
@@ -267,33 +275,47 @@ class ChatController extends ChangeNotifier {
     notifyListeners();
 
     try {
-      // ベクトル検索で類似した過去の会話を取得
+      // ベクトル検索で類似した過去の会話を取得（保存前に実行して自分の発言を除外）
       final similarMessages = await _getSimilarMessages(text);
+
+      // Firestoreに保存
+      await _saveChatMessage(userMessage);
       
-      // 類似メッセージをコンテキストとして追加
-      String contextPrompt = '';
-      if (similarMessages.isNotEmpty) {
-        print('💡 コンテキスト追加: ${similarMessages.length}件の過去の会話を参照');
-        contextPrompt = '\n\n過去の関連する会話:\n';
-        for (var msg in similarMessages) {
-          contextPrompt += '- ${msg['role']}: ${msg['content']}\n';
+      // システムプロンプトに過去の会話の要約を追加
+      String enhancedSystemPrompt = _systemPrompt;
+      // 低類似（距離0.6以上）を除外
+      final relevantMessages = similarMessages.where((msg) {
+        final d = (msg['distance'] as num?)?.toDouble();
+        return d == null || d < 0.6;
+      }).toList();
+      if (relevantMessages.isNotEmpty) {
+        print('💡 コンテキスト追加: ${relevantMessages.length}件（低類似除外後、元: ${similarMessages.length}件）');
+        
+        String contextSummary = '\n\n## ユーザーについて知っていること（過去の会話より）\n';
+        contextSummary += '以下はこのユーザーの好みや発言の記録です。\n';
+        contextSummary += '返答する際は、ユーザーの好みを今の話題に自然に結びつけてください。\n';
+        contextSummary += '「オリンピック」の話題なら「野球はオリンピックで見る？」のように過去の好みを絡めてください。\n\n';
+        for (var msg in relevantMessages) {
+          final role = msg['role'] == 'user' ? 'ユーザー' : 'ムチモン';
+          contextSummary += '- $role: "${msg['content']}"\n';
         }
-        contextPrompt += '\n上記の過去の会話を参考にして、文脈に沿った返答をしてください。';
+        contextSummary += '\n【必須】一般的な質問（「どの競技が好き？」等）はしないこと。必ず上記の過去情報と今の話題を結びつけた返答をすること。';
+        
+        enhancedSystemPrompt += contextSummary;
+        print('📝 システムプロンプトへの追加内容:\n$contextSummary');
       } else {
-        print('💡 コンテキスト追加: なし（通常の会話として処理）');
+        print('💡 コンテキスト追加: なし（低類似除外後0件 or 元々なし）');
       }
-      // 会話履歴を構築
+      
+      // 会話履歴を構築（空のアシスタントメッセージは除外）
       final conversationHistory = _messages.where((msg) => 
-        msg != assistantMessage // まだ空のアシスタントメッセージは除外
+        msg != assistantMessage
       ).map((msg) {
         return {
           'role': msg.role == MessageRole.user ? 'user' : 'assistant',
           'content': msg.content,
         };
       }).toList();
-
-      // システムプロンプトにコンテキストを追加
-      final enhancedSystemPrompt = _systemPrompt + contextPrompt;
 
       // ストリーミングでレスポンスを受け取る
       await for (final chunk in _azureService.sendChatMessageStream(
